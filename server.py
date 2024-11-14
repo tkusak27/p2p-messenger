@@ -12,15 +12,13 @@ def start_server(hostname, port):
         client_socket, client_address = server_socket.accept()
         print(f"Connection from {client_address}")
         
-        # Send message every minute
         while True:
-            message = "Hello from the server!"
+            message = "hello - from server"
             client_socket.send(bytes(message, "utf-8"))
             print("Sent message to client")
-            time.sleep(1)  # Send message every 1 seconds
+            time.sleep(1)  
 
 if __name__ == "__main__":
-    # Change this to your desired hostname and port
     hostname = "0.0.0.0"  # Listening on just localhost
-    port = 12345  # Choose an arbitrary port
+    port = 12345
     start_server(hostname, port)
