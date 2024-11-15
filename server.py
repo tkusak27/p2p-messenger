@@ -1,10 +1,10 @@
 import socket
 import json
+import defaultdict
 
 class NameServer(object):
     def __init__(self):
-        # need to load in checkpoint and logs
-        pass
+        self.rooms = defaultdict(list)
 
     def start_server(self, hostname, port):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -32,16 +32,24 @@ class NameServer(object):
                     print(f"Parsed message: {parsed_message}")
 
                     if (
-                        parsed_message.get("action") == "join_group" and
-                        "group" in parsed_message
+                        parsed_message.get("action") == "join_room" and
+                        "room" in parsed_message
                     ):
-                        group_name = parsed_message["group"]
-                        print(f"Client requested to join group: {group_name}")
+                        room_name = parsed_message["room"]
+                        print(f"Client requested to join room: {room_name}")
 
-                        response = {
-                            "status": "success",
-                            "message": f"Successfully joined group '{group_name}'"
-                        }
+                        rooms = self.add_client_to_room(room_name, client_address):
+                        if rooms
+                            response = {
+                                "status": "success",
+                                "message": f"Successfully joined room '{room_name}'",
+                                "ips": rooms,
+                            }
+                        else:
+                            response = {
+                                "status": "failure",
+                                "message": f"room {room_name} does not exist"
+                            }
                     else:
                         response = {
                             "status": "error",
@@ -62,6 +70,21 @@ class NameServer(object):
             finally:
                 client_socket.close()
                 print("Closed connection with client")
+
+    def add_client_to_room(self, room, address):
+        if room not in self.rooms:
+            return False
+        
+        else:
+            self.rooms[room].append(address)
+            self.update_client_list(room)
+            return self.rooms[room]
+        
+    def update_client_list(room):
+        # need to implement
+        pass
+
+        
 
 if __name__ == "__main__":
     hostname = "0.0.0.0"

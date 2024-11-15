@@ -15,7 +15,7 @@ class P2PClient(object):
 
             join_request = {
                 "action": "join",
-                "group": "distsys"
+                "room": "distsys"
             }
             client_socket.sendall(json.dumps(join_request).encode("utf-8"))
             print(f"Sent join request: {join_request}")
