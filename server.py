@@ -38,8 +38,9 @@ class NameServer(object):
                         room_name = parsed_message["room"]
                         print(f"Client requested to join room: {room_name}")
 
-                        rooms = self.add_client_to_room(room_name, client_address):
-                        if rooms
+                        rooms = self.add_client_to_room(room_name, client_address)
+                        
+                        if rooms:
                             response = {
                                 "status": "success",
                                 "message": f"Successfully joined room '{room_name}'",
