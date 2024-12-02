@@ -35,5 +35,4 @@ class P2PClient(object):
 if __name__ == "__main__":
     target_hostname = "127.0.0.1"  # localhost
     target_port = 12345           # specified port
-    client = P2PClient()
-    client.connect_to_server(target_hostname, target_port)
+
