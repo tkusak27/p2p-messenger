@@ -33,51 +33,47 @@ class P2PClient(object):
         print("StudyChat P2P client has been started!\n")
         print("To get started, please select one of the options below by typing the corresponding letter and pressing enter.")
         user_input = self.display_menu()
-        print(f"user input is {user_input}")
-        match user_input:
-            # list public rooms
-            case "A":
-                pass
-            # join a room
-            case "B":
-                if self.join_handler():
-                    self.chat_handler()
-            # create a room
-            case "C":
-                print("Case C!")
-                if self.create_handler():
-                    # should already be a part of the room, so just run chat handler
-                    self.chat_handler()
-                else:
-                    print("Error: Please restart the program.")
-                    return
-                
-            case "Q":
-                return
 
-
-    def create_handler(self):
-        '''
-        Basic handler for user input when "create room" is selected.
-        '''
-        print("Please enter the name of the room you wish to create: ", end="")
-
-        room_name = sys.stdin.readline().strip()
-        return self.create_room(room_name)
+        # used to be match statement but wasn't working
+        # list public rooms
+        if user_input == "A":
+            pass
+        # join a room
+        elif user_input == "B":
+            out = self.join_handler()
+            if out: 
+                self.chat_handler()
+        # create a room
+        elif user_input == "C":
+            print("Please enter the name of the room you wish to create: ")
+            room_name = sys.stdin.readline().strip()
+            room_name = None
+            # if room_name:
+            #     # should already be a part of the room, so just run chat handler
+            #     self.chat_handler()
+            # else:
+            #     print("Error: Please restart the program.")
+            #     return
+            
+        elif user_input == "Q":
+            return
 
 
     def join_handler(self):
         '''
-         Basic handler for user input when "join room" is selected.
+        Basic handler for user input when "join room" is selected.
         '''
-        print("Please enter the name of the room you wish to join: ")
-        print("Input: ", end="")
+        print("\nPlease enter the name of the room you wish to join.\nInput:", end="")
 
         room_name = sys.stdin.readline().strip()
         return self.join_room(room_name)
     
 
     def chat_handler(self):
+        '''
+        Key handler which handles all chat communication, such as sending and receiving
+        messages, as well as 
+        '''
         pass
 
 
