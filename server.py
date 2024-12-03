@@ -2,6 +2,7 @@ import socket
 import json
 
 class NameServer(object):
+
     def __init__(self):
         self.rooms = {}
 
@@ -34,18 +35,15 @@ class NameServer(object):
                     client_socket.close()
                     continue
 
-                print(f"Received message from client: {message}")
-
                 try:
                     parsed_message = json.loads(message)
                     print(f"Parsed message: {parsed_message}")
 
                     match parsed_message["action"]:
 
-                        # if the message is a join room message
                         case "join":
                             room_name = parsed_message["room"]
-                            print(f"Client requested to join room: {room_name}")
+                            print(f"{client_address} requested to join room: {room_name}")
                             rooms = self.__add_client_to_room(room_name, client_address)
                             if rooms:
                                 response = {
@@ -59,10 +57,9 @@ class NameServer(object):
                                     "message": f"room {room_name} does not exist"
                                 }
 
-                        # if the message is a create room message
                         case "create":
                             room_name = parsed_message["room"]
-                            print(f"Client requested to create room: {room_name}")
+                            print(f"{client_address} requested to create room: {room_name}")
                             if room_name:
                                 self.__create_room(room_name, client_address)
                             else:
@@ -70,6 +67,18 @@ class NameServer(object):
                                     "status": "error",
                                     "message": "Invalid request format"
                                 }
+
+                        case "remove":
+                            room_name = parsed_message["room"]
+                            print(f"{client_address} requested to leave room ")
+                            if room_name:
+                                self.__remove_client_from_room(room_name, client_address)
+                            else:
+                                response = {
+                                    "status": "error",
+                                    "message": "Invalid request format"
+                                }
+
                 except json.JSONDecodeError:
                     response = {
                         "status": "error",
@@ -116,6 +125,7 @@ class NameServer(object):
             # self.update_client_list(room)
             return self.rooms[room]
         
+
     def __remove_client_from_room(self, room, address):
         '''
         Removes a client from a room.
@@ -124,9 +134,19 @@ class NameServer(object):
             room (str): Identifier of the room the client should be removed from.
             address (str): IP address of the client who should be removed from the room.
         '''
-        # need to implement
-        pass
+        if room not in self.rooms:
+            return False
         
+        else:
+            i = 0
+            while i < len(self.rooms[room]):
+                if self.rooms[room][i] == address:
+                    self.rooms[room].pop(i)
+                    return True
+
+        return False                
+                
+                
     def __update_client_list(self, room):
         '''
         Re-sends out a client list to all members of a specified room.
