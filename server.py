@@ -4,6 +4,9 @@ import json
 class NameServer(object):
 
     def __init__(self):
+        '''
+        Create a NameServer object.
+        '''
         self.rooms = {}
 
 
@@ -14,8 +17,6 @@ class NameServer(object):
         args:
             hostname (str): The IP address of the central server that stores room information.
             port (int): The port where the central server is running. 
-        returns:
-            None
         '''
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -62,6 +63,10 @@ class NameServer(object):
                             print(f"{client_address} requested to create room: {room_name}")
                             if room_name:
                                 self.__create_room(room_name, client_address)
+                                response = {
+                                    "status": "success",
+                                    "message": f"Successfully created room '{room_name}'",
+                                }
                             else:
                                 response = {
                                     "status": "error",
@@ -73,6 +78,10 @@ class NameServer(object):
                             print(f"{client_address} requested to leave room ")
                             if room_name:
                                 self.__remove_client_from_room(room_name, client_address)
+                                response = {
+                                    "status": "success",
+                                    "message": f"Successfully left room '{room_name}'",
+                                }
                             else:
                                 response = {
                                     "status": "error",
@@ -146,7 +155,7 @@ class NameServer(object):
 
         return False                
                 
-                
+
     def __update_client_list(self, room):
         '''
         Re-sends out a client list to all members of a specified room.
@@ -154,8 +163,8 @@ class NameServer(object):
         args:
             room (str): Identifier of the room the new list will be send out to.
         '''
-        # need to implement
-        pass
+        if room not in self.rooms:
+            return False
 
 
 if __name__ == "__main__":

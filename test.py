@@ -10,4 +10,4 @@ client2 = P2PClient(target_hostname, target_port)
 
 client1.create_room("distsys")
 time.sleep(5)
-client2.get_room_info("distsys")
+client2.join_room("distsys")
