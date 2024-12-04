@@ -1,4 +1,4 @@
-import socket, json, sys
+import socket, json, sys, select
 
 class P2PClient(object):
 
@@ -11,10 +11,15 @@ class P2PClient(object):
             port (int): The port where the central server is running. 
             auto_run_handler (bool): Set to False for stress testing, otherwise leave untouched.
         '''
-        self.hostname = hostname
-        self.port = port
+        self.server_hostname = hostname
+        self.server_port = port
+        self.server_socket = None
         self.room = None
-        self.peers = None
+        self.peers = []
+        self.running = False
+        self.address = None
+        self.port = None
+        self.user_id = None
 
         if auto_run_handler:
             self.main_handler()
@@ -31,29 +36,33 @@ class P2PClient(object):
         input that handles the clients state. All other input will be treated as a message.
         '''
         print("StudyChat P2P client has been started!\n")
-        print("To get started, please select one of the options below by typing the corresponding letter and pressing enter.")
+        print("To get started, please create a username: ", end="", flush=True)
+        self.user_id = sys.stdin.readline().strip()
+        print("Now select one of the options below by typing the corresponding letter and pressing enter.")
         user_input = self.display_menu()
 
         # used to be match statement but wasn't working
         # list public rooms
         if user_input == "A":
             pass
+
         # join a room
         elif user_input == "B":
             out = self.join_handler()
             if out: 
+                self.running = True
                 self.chat_handler()
+
         # create a room
         elif user_input == "C":
-            print("Please enter the name of the room you wish to create: ")
+            print("Please enter the name of the room you wish to create: ", end="", flush=True)
             room_name = sys.stdin.readline().strip()
-            room_name = None
-            # if room_name:
-            #     # should already be a part of the room, so just run chat handler
-            #     self.chat_handler()
-            # else:
-            #     print("Error: Please restart the program.")
-            #     return
+            if room_name and self.create_room(room_name):
+                self.running = True
+                self.chat_handler()
+            else:
+                print("Error: Please restart the program.")
+                return
             
         elif user_input == "Q":
             return
@@ -63,7 +72,7 @@ class P2PClient(object):
         '''
         Basic handler for user input when "join room" is selected.
         '''
-        print("\nPlease enter the name of the room you wish to join.\nInput:", end="")
+        print("\nPlease enter the name of the room you wish to join.\nInput:", end="", flush=True)
 
         room_name = sys.stdin.readline().strip()
         return self.join_room(room_name)
@@ -72,10 +81,62 @@ class P2PClient(object):
     def chat_handler(self):
         '''
         Key handler which handles all chat communication, such as sending and receiving
-        messages, as well as 
+        messages
         '''
-        pass
+        # assuming we have already joined the room and have the ips
+        print(f"Opening chatroom {self.room}...")
+        print(f"{len(self.peers)} peers are here now.")
+        print("Type 'exit' to leave the chatroom.")
+        print("> ", end="", flush=True)
 
+        self.running = True
+
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.bind(('', self.port)) 
+
+        try:
+            while self.running:
+                readable, _, _ = select.select([sys.stdin, udp_socket], [], [])
+
+                for source in readable:
+                    if source == udp_socket:
+                        data, addr = udp_socket.recvfrom(1024)
+                        msg = json.loads(data.decode('utf-8'))
+                        if "status" in msg and msg["status"] == "update":
+                            self.peers = [tuple(peer) for peer in msg["clients"]]
+                        else:
+                            print(f'\n{msg["user"]}: {msg["body"]}')
+                            print("> ", end="", flush=True)
+
+
+                    elif source == sys.stdin: 
+                        message = sys.stdin.readline().strip()
+                        if message.lower() == "exit":
+                            print("Exiting chatroom...")
+                            self.running = False
+                            break
+                        
+                        print("> ", end="", flush=True)
+
+                        for peer in self.peers:
+                            if peer != (self.address, self.port):
+                                try:
+                                    send_msg = {
+                                        "user": self.user_id,
+                                        "body": message
+                                    }
+                                    json_send_msg = json.dumps(send_msg)
+                                    udp_socket.sendto(json_send_msg.encode('utf-8'), tuple(peer))
+
+                                except Exception as e:
+                                    print(f"Error sending message to {peer}: {e}")
+                        
+
+
+        except KeyboardInterrupt:
+            print("\nChatroom closed.")
+        finally:
+            udp_socket.close()
 
 
     def display_menu(self):
@@ -95,7 +156,7 @@ class P2PClient(object):
                 print(f"'{option}' is not a valid option. Please try again.")
 
 
-    def connect_to_central_server(self, hostname=None, port=None):
+    def connect_to_central_server(self, server_hostname=None, server_port=None):
         '''
         Connects the P2PClient object to the central server.
 
@@ -103,21 +164,20 @@ class P2PClient(object):
             hostname (str): IP address of the central server.
             port (int): Port of the central server.
         '''
-        if not hostname:
-            hostname = self.hostname
-        if not port:
-            port = self.port
+        if not server_hostname:
+            server_hostname = self.server_hostname
+        if not server_port:
+            server_port = self.server_port
         
         try:
-            print(f"Attempting to connect to {self.hostname}:{port}")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(5) 
-            client_socket.connect((hostname, port))
-            print(f"Connected to server on {hostname}:{port}")
+            client_socket.connect((server_hostname, server_port))
+            self.address, self.port = client_socket.getsockname()
             return client_socket
         except(socket.timeout, socket.error) as e:
             print(f"Connection failed: {e}")
-            client_socket.close()
+            return None
 
     
     def handle_message(self):
@@ -133,9 +193,9 @@ class P2PClient(object):
             room (str): Identifier of the room the client wishes to join.
         '''
         try:
-            client_socket = self.connect_to_central_server(self.hostname, self.port)
-            if not client_socket:
-                print(f"Error creating socket connection to {self.hostname}:{self.port}")
+            self.server_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
+            if not self.server_socket:
+                print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
                 return False
             
             join_request = {
@@ -143,18 +203,18 @@ class P2PClient(object):
                 "room": room
             }
 
-            client_socket.sendall(json.dumps(join_request).encode("utf-8"))
+            self.server_socket.sendall(json.dumps(join_request).encode("utf-8"))
             print(f"Sent join request: {join_request}")
 
             while True:
-                message = client_socket.recv(1024)
+                message = self.server_socket.recv(1024)
                 if message:
                     response = json.loads(message.decode("utf-8"))
 
                     if response["status"] == "success":
-                        print(f"Server successfully joined {room}")
-                        self.rooms = room
-                        self.peers = response["ips"]
+                        print(f"Client successfully joined {room}")
+                        self.room = room
+                        self.peers = [tuple(room) for room in response["ips"]]
                         return True
                     
                     else:
@@ -166,8 +226,6 @@ class P2PClient(object):
                     break
         except (socket.timeout, socket.error) as e:
             print(f"Connection failed: {e}")
-        finally:
-            client_socket.close()
         
 
     def create_room(self, room):
@@ -179,19 +237,20 @@ class P2PClient(object):
         '''
         print(f"Attempting to create room {room}...")
         try:
-            client_socket = self.connect_to_central_server(self.hostname, self.port)
-            if not client_socket:
-                print(f"Error creating socket connection to {self.hostname}:{self.port}")
+            self.server_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
+            if not self.server_socket:
+                print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
                 return False
             
             join_request = {
                 "action": "create",
-                "room": room
+                "room": room,
             }
-            client_socket.sendall(json.dumps(join_request).encode("utf-8"))
+            self.server_socket.sendall(json.dumps(join_request).encode("utf-8"))
 
             while True:
-                message = client_socket.recv(1024)
+                message = self.server_socket.recv(1024)
+                print(f"Received from central server: {message}")
                 if message:
                     response = json.loads(message.decode("utf-8"))
 
@@ -206,9 +265,9 @@ class P2PClient(object):
         
         except (socket.timeout, socket.error) as e:
             print(f"Connection failed: {e}")
-        finally:
-            client_socket.close()
 
+
+    # fix this for later
     def leave_room(self, room):
         '''
         Get the client to leave the room
@@ -217,9 +276,9 @@ class P2PClient(object):
             room (str): Identifier of the room the client wishes to leave.
         '''
         try:
-            client_socket = self.connect_to_central_server(self.hostname, self.port)
+            client_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
             if not client_socket:
-                print(f"Error creating socket connection to {self.hostname}:{self.port}")
+                print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
                 return False
             
             join_request = {
@@ -248,39 +307,8 @@ class P2PClient(object):
         finally:
             client_socket.close()
 
-    def send_message(self, msg):
-        '''
-        Join a room and give the user the ability to send/receive messages from room members.
-
-        args:
-            room (str): Name of the room
-        '''
-        if not self.room:
-            print("You must join a room before sending a message.")
-            return False
-
-        if not self.peers:
-            print("No peers available to send messages to.")
-            return False
-
-        try:
-            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-            for peer in self.peers:
-                ip, port = peer
-                try:
-                    udp_socket.sendto(msg.encode('utf-8'), (ip, port))
-                    print(f"Message sent to {ip}:{port}")
-                except Exception as e:
-                    print(f"Failed to send message to {ip}:{port}: {e}")
-        except Exception as e:
-            print(f"An error occurred while sending messages: {e}")
-        finally:
-            udp_socket.close()
-
-
 
 if __name__ == "__main__":
-    target_hostname = "student12.cse.nd.edu"
+    target_hostname = "student11.cse.nd.edu"
     target_port = 12345
     client = P2PClient(target_hostname, target_port)
