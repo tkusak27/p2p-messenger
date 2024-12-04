@@ -204,7 +204,6 @@ class P2PClient(object):
             }
 
             self.server_socket.sendall(json.dumps(join_request).encode("utf-8"))
-            print(f"Sent join request: {join_request}")
 
             while True:
                 message = self.server_socket.recv(1024)

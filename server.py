@@ -46,11 +46,12 @@ class NameServer(object):
                             room_name = parsed_message["room"]
                             print(f"{client_address} requested to join room: {room_name}")
                             rooms = self.__add_client_to_room(room_name, client_address)
+                            self.__update_client_list(room_name)
                             if rooms:
                                 response = {
                                     "status": "success",
                                     "message": f"Successfully joined room '{room_name}'",
-                                    "ips": rooms,
+                                    "ips": rooms
                                 }
                             else:
                                 response = {
@@ -114,6 +115,7 @@ class NameServer(object):
             room (str): Identifier of the room the client wishes to create.
             address (str): IP address of the client who requested to create the room.
         '''
+        print(f"Adding {address} to room")
         self.rooms[room] = [address]
         return True
 
@@ -126,6 +128,7 @@ class NameServer(object):
             room (str): Identifier of the room the client should be added to.
             address (str): IP address of the client who should be added to the room.
         '''
+        print(f"Adding {address} to room")
         if room not in self.rooms:
             return False
         
@@ -158,13 +161,35 @@ class NameServer(object):
 
     def __update_client_list(self, room):
         '''
-        Re-sends out a client list to all members of a specified room.
+        Sends an updated client list to all members of a specified room.
 
         args:
-            room (str): Identifier of the room the new list will be send out to.
+            room (str): Identifier of the room to which the updated list will be sent.
         '''
-        if room not in self.rooms:
+        if room not in self.rooms or not self.rooms[room]:
+            print(f"Room '{room}' does not exist or has no members.")
             return False
+
+        updated_list = {
+            "status": "update",
+            "room": room,
+            "clients": self.rooms[room],
+        }
+        message = json.dumps(updated_list)
+
+        for client_address in self.rooms[room]:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect(client_address)
+                    sock.sendall(message.encode("utf-8"))
+                    print(f"Sent updated list to {client_address}")
+            except Exception as e:
+                print(f"update_client_list: Error sending update to {client_address}: {e}")
+
+        return True
+        
+        
+
 
 
 if __name__ == "__main__":
