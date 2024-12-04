@@ -1,9 +1,25 @@
 # p2p-messenger
-- say names / introduce yourself
-- hand drawn state machine
-- 1-2 slides on summary of project
-  - vocab page defining any niche terms we reuse
-- 4-5 slides slowly going through the steps
-- 1 slide on assumptions
-- 1-2 slides on output/next steps
-- if we want, a quick pre-recorded video demonstrating how things work
+
+## Overview
+finish this section
+
+## Current Status
+The project is currently ready to be presented; however the code has not been finalized for submission. Expect some edits over the next few days before the deadline (12/11).
+
+### Features left to implement
+* Client leaving the room
+* Lamport clock for message catch-up
+
+## How to Run
+To run the **p2p-messanger** application, there are several steps.
+
+1. Log into one of Notre Dame's student machines (i.e. `student10`, `student11`, etc).
+
+2. Clone this repository.
+
+3. Ensure a copy of `server.py` is running somewhere on the student machine. Either you, or someone else logged into this machine can do this:
+  ```bash
+  python3 server.py
+  ```
+
+4. 
