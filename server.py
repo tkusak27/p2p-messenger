@@ -46,7 +46,7 @@ class NameServer(object):
                             room_name = parsed_message["room"]
                             print(f"{client_address} requested to join room: {room_name}")
                             rooms = self.__add_client_to_room(room_name, client_address)
-                            self.__update_client_list(room_name)
+                            self.__update_client_list(room_name, "join", client_address)
                             if rooms:
                                 response = {
                                     "status": "success",
@@ -74,11 +74,12 @@ class NameServer(object):
                                     "message": "Invalid request format"
                                 }
 
-                        case "remove":
+                        case "leave":
                             room_name = parsed_message["room"]
                             print(f"{client_address} requested to leave room ")
                             if room_name:
                                 self.__remove_client_from_room(room_name, client_address)
+                                self.__update_client_list(room_name, "leave", client_address)
                                 response = {
                                     "status": "success",
                                     "message": f"Successfully left room '{room_name}'",
@@ -155,11 +156,11 @@ class NameServer(object):
                 if self.rooms[room][i] == address:
                     self.rooms[room].pop(i)
                     return True
-
+        
         return False                
                 
 
-    def __update_client_list(self, room):
+    def __update_client_list(self, room, type, member):
         '''
         Sends an updated client list to all members of a specified room.
 
@@ -172,8 +173,10 @@ class NameServer(object):
 
         updated_list = {
             "status": "update",
+            "type": type,
             "room": room,
             "clients": self.rooms[room],
+            "member": member
         }
         message = json.dumps(updated_list)
 
