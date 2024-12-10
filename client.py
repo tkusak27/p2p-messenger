@@ -1,5 +1,6 @@
 import socket, json, sys, select
 from styles.bcolors import bcolors
+from collections import deque
 
 class P2PClient(object):
 
@@ -21,6 +22,7 @@ class P2PClient(object):
         self.address = None
         self.port = None
         self.user_id = None
+        self.message_log = deque(maxlen=20)
 
         if auto_run_handler:
             self.main_handler()
@@ -141,13 +143,27 @@ class P2PClient(object):
         
         # special user command
         if message.lower().startswith("/"):
-            if message.lower().endswith("exit"):
+            if message.lower() == "/help":
+                print("\n=== Options ===\n")
+                print("/history - shows most recent sent messages")
+                print("/exit - exits room and returns to menu")
+                print("\n====================\n")
+            elif message.lower().endswith("/exit"):
                 print("Exiting chatroom...")
                 self.running = False
                 return -1
+            elif message.lower() == "/history":
+                print("\n=== Message History ===")
+                for idx, msg in enumerate(self.message_log, 1):
+                    print(f"{idx}. {msg}")
+                print("====================\n")
 
         
         print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+
+        # Only add non-command messages to the log
+        if not message.startswith("/"):
+            self.message_log.append(message)
 
         for peer in self.peers:
             if peer != (self.address, self.port):
