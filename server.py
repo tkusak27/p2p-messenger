@@ -42,6 +42,26 @@ class NameServer(object):
 
                     match parsed_message["action"]:
 
+                        case "list":
+                            print(f"{client_address} requested to list rooms")
+                            rooms = self.rooms
+                            if rooms:
+                                response = {
+                                    "status": "success",
+                                    "message": "Retrieved available rooms",
+                                    "rooms": {
+                                        room_name: {
+                                            "member_count": len(members)
+                                        }
+                                        for room_name, members in rooms.items()
+                                    }
+                                }
+                            else:
+                                response = {
+                                    "status": "success",
+                                    "message": f"There are no active rooms available"
+                                }
+
                         case "join":
                             room_name = parsed_message["room"]
                             print(f"{client_address} requested to join room: {room_name}")
@@ -105,7 +125,6 @@ class NameServer(object):
             finally:
                 client_socket.close()
                 print("Closed connection with client")
-
 
     def __create_room(self, room, address):
         '''

@@ -39,41 +39,43 @@ class P2PClient(object):
         print(bcolors.OKGREEN + bcolors.BOLD + "StudyChat P2P client has been started!\n" + bcolors.ENDC) 
         print(bcolors.YELLOW + "To get started, please create a username: " + bcolors.ENDC, end="", flush=True)
         self.user_id = sys.stdin.readline().strip()
-        print("\nNow select one of the options below by typing the corresponding letter and pressing enter.")
-        user_input = self.display_menu()
+        
+        while True:
+            print("\nNow select one of the options below by typing the corresponding letter and pressing enter.")
+            user_input = self.display_menu()
 
-        # used to be match statement but wasn't working
-        # list public rooms
-        if user_input == "A":
-            pass
+            # used to be match statement but wasn't working
+            # list public rooms
+            if user_input == "A":
+                self.list_rooms()
 
-        # join a room
-        elif user_input == "B":
-            out = self.join_handler()
-            if out: 
-                self.running = True
-                self.chat_handler()
+            # join a room
+            if user_input == "B":
+                out = self.join_handler()
+                if out: 
+                    self.running = True
+                    self.chat_handler()
 
-        # create a room
-        elif user_input == "C":
-            print(bcolors.YELLOW + "Please enter the name of the room you wish to create: " + bcolors.ENDC, end="", flush=True)
-            room_name = sys.stdin.readline().strip()
-            if room_name and self.create_room(room_name):
-                self.running = True
-                self.chat_handler()
-            else:
-                print("Error: Please restart the program.")
+            # create a room
+            elif user_input == "C":
+                print(bcolors.YELLOW + "Please enter the name of the room you wish to create: " + bcolors.ENDC, end="", flush=True)
+                room_name = sys.stdin.readline().strip()
+                if room_name and self.create_room(room_name):
+                    self.running = True
+                    self.chat_handler()
+                else:
+                    print("Error: Please restart the program.")
+                    return
+                
+            elif user_input == "Q":
                 return
-            
-        elif user_input == "Q":
-            return
 
 
     def join_handler(self):
         '''
         Basic handler for user input when "join room" is selected.
         '''
-        print("\nPlease enter the name of the room you wish to join.\nInput:", end="", flush=True)
+        print("\nPlease enter the name of the room you wish to join.\nInput: ", end="", flush=True)
 
         room_name = sys.stdin.readline().strip()
         return self.join_room(room_name)
@@ -205,6 +207,50 @@ class P2PClient(object):
     def handle_message(self):
         # need to implement, basically consolidate the following functions to re-use code
         pass
+
+    def list_rooms(self):
+        '''
+        Lists all available rooms from the central server.
+        
+        Returns:
+            bool: True if rooms were successfully listed, False otherwise
+        '''
+        try:
+            self.server_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
+            if not self.server_socket:
+                print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
+                return False
+            
+            list_request = {
+                "action": "list"
+            }
+            
+            self.server_socket.sendall(json.dumps(list_request).encode("utf-8"))
+            
+            message = self.server_socket.recv(1024)
+            if message:
+                response = json.loads(message.decode("utf-8"))
+                
+                if response["status"] == "success":
+                    rooms = response.get("rooms", {})
+                    if not rooms:
+                        print(f"\n{bcolors.YELLOW}No active rooms available.{bcolors.ENDC}")
+                    else:
+                        print(f"\n{bcolors.GREEN}Available rooms:{bcolors.ENDC}")
+                        for room_name, info in rooms.items():
+                            member_count = info.get("member_count", 0)
+                            print(f"{bcolors.CYAN}• {room_name}: {member_count} member(s){bcolors.ENDC}")
+                    return True
+                else:
+                    print(f"{bcolors.RED}Failed to retrieve room list: {response.get('message', 'Unknown error')}{bcolors.ENDC}")
+                    return False
+                    
+        except (socket.timeout, socket.error) as e:
+            print(f"{bcolors.RED}Connection failed: {e}{bcolors.ENDC}")
+            return False
+        finally:
+            if self.server_socket:
+                self.server_socket.close()
 
 
     def join_room(self, room):
