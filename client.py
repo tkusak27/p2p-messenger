@@ -23,6 +23,10 @@ class P2PClient(object):
         self.port = None
         self.user_id = None
         self.message_log = deque(maxlen=20)
+        self.message_clock = dict()
+        self.join_time_clock = {}  # Track clock values at join time
+        self.recovery_in_progress = set()
+        self.received_messages = set()
 
         if auto_run_handler:
             self.main_handler()
@@ -98,7 +102,6 @@ class P2PClient(object):
 
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.bind(('', self.port)) 
-
         try:
             while self.running:
                 readable, _, _ = select.select([sys.stdin, udp_socket], [], [])
@@ -107,6 +110,7 @@ class P2PClient(object):
                     if source == udp_socket:
                         data, addr = udp_socket.recvfrom(1024)
                         msg = json.loads(data.decode('utf-8'))
+                        
                         if "status" in msg and msg["status"] == "update":
                             self.peers = [tuple(peer) for peer in msg["clients"]]
                             if "type" in msg and msg["type"] == "join":
@@ -114,9 +118,81 @@ class P2PClient(object):
                             elif "type" in msg and msg["type"] == "leave":
                                 print(f"{bcolors.WARNING}{msg['member']} has left the room{bcolors.ENDC}")
 
-                        else:
-                            print(f'\n{msg["user"]}: {msg["body"]}')
-                            print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+                        elif msg.get("type") == "message_request":
+                            self.send_requested_messages(
+                                udp_socket, 
+                                msg["requesting_port"], 
+                                msg["count"],
+                                msg.get("from_count", 0)
+                            )
+
+                        elif msg.get("type") == "recovery":
+                            sender_port = str(addr[1])
+                            msg_id = msg["message_id"]
+                            
+                            if msg_id not in self.received_messages:
+                                self.received_messages.add(msg_id)
+                                sequence_number = msg["sequence_number"]
+                                
+                                # Only process if this is the next message we're expecting
+                                if sequence_number == self.message_clock.get(sender_port, 0) + 1:
+                                    self.message_clock[sender_port] = sequence_number
+                                    print(f'\n{bcolors.YELLOW}[RECOVERY] {msg["user"]}: {msg["body"]}{bcolors.ENDC}')
+                                    print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+
+                        elif msg.get("type") == "recovery_complete":
+                            sender_port = msg["sender_port"]
+                            if sender_port in self.recovery_in_progress:
+                                self.recovery_in_progress.remove(sender_port)
+                                self.message_clock.update(msg["final_clock"])
+                                print(f"\n{bcolors.YELLOW}[RECOVERY] Completed recovery from client {sender_port}{bcolors.ENDC}")
+                                print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+
+                        else:  # Regular chat message
+                            sender_port = str(addr[1])
+                            msg_id = msg.get("message_id", f"{sender_port}_{time.time()}")
+                            
+                            if msg_id not in self.received_messages:
+                                self.received_messages.add(msg_id)
+                                
+                                # Check for clock inconsistencies
+                                if "message_clock" in msg:
+                                    received_clock = msg["message_clock"]
+                                    needs_recovery = False
+                                    
+                                    # Only check clocks if we're not already recovering
+                                    if not self.recovery_in_progress:
+                                        for port, count in received_clock.items():
+                                            if port == sender_port:
+                                                # Only recover if we've seen messages from this client before
+                                                if port in self.join_time_clock:
+                                                    expected = self.message_clock.get(port, 0) + 1
+                                                    join_time_count = self.join_time_clock.get(port, 0)
+                                                    # Only recover if messages were lost after we joined
+                                                    if count > expected and count > join_time_count:
+                                                        needs_recovery = True
+                                            else:
+                                                local_count = self.message_clock.get(port, 0)
+                                                join_time_count = self.join_time_clock.get(port, 0)
+                                                # Only recover if messages were lost after we joined
+                                                if count > local_count and count > join_time_count:
+                                                    needs_recovery = True
+                                        
+                                        if needs_recovery:
+                                            self.request_missing_messages(
+                                                udp_socket, 
+                                                sender_port, 
+                                                received_clock[sender_port],
+                                                self.message_clock.get(sender_port, 0)
+                                            )
+                                    
+                                    # Update clock if message is in sequence or from new client
+                                    if not needs_recovery:
+                                        self.message_clock.update(received_clock)
+                                
+                                if msg.get("type") != "recovery":
+                                    print(f'\n{msg["user"]}: {msg["body"]}')
+                                    print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
 
                     elif source == sys.stdin: 
                         output = self.handle_user_input(udp_socket)
@@ -127,6 +203,80 @@ class P2PClient(object):
             print("\nChatroom closed.")
         finally:
             udp_socket.close()
+
+    def request_missing_messages(self, udp_socket, peer_port, expected_count, current_count):
+        '''
+        Request missing messages from a peer when clock inconsistency is detected.
+        '''
+        # Don't request if already in progress for this peer
+        if peer_port in self.recovery_in_progress:
+            return
+            
+        missing_count = expected_count - current_count
+        request_msg = {
+            "type": "message_request",
+            "requesting_port": str(self.port),
+            "count": missing_count,
+            "from_count": current_count  # Add starting point for recovery
+        }
+        
+        peer_address = None
+        for peer in self.peers:
+            if str(peer[1]) == peer_port:
+                peer_address = peer
+                break
+        
+        if peer_address:
+            self.recovery_in_progress.add(peer_port)
+            json_request = json.dumps(request_msg)
+            udp_socket.sendto(json_request.encode('utf-8'), peer_address)
+
+    def send_requested_messages(self, udp_socket, requesting_port, count, from_count):
+        '''
+        Send requested messages from our log to the requesting peer.
+        
+        args:
+            udp_socket (socket): The UDP socket for sending messages
+            requesting_port (str): Port of the requesting peer
+            count (int): Number of messages requested
+            from_count (int): Starting message count to sync from
+        '''
+        # Find the messages that were sent after from_count
+        messages_to_send = []
+        current_messages = list(self.message_log)
+        current_count = self.message_clock[str(self.port)]
+        start_index = max(0, len(current_messages) - (current_count - from_count))
+        
+        if start_index < len(current_messages):
+            messages_to_send = current_messages[start_index:]
+
+        requester_address = None
+        for peer in self.peers:
+            if str(peer[1]) == requesting_port:
+                requester_address = peer
+                break
+        
+        if requester_address:
+            for idx, message in enumerate(messages_to_send):
+                msg_id = f"{self.port}_{from_count + idx + 1}"
+                send_msg = {
+                    "user": self.user_id,
+                    "body": message,
+                    "message_clock": self.message_clock.copy(),
+                    "type": "recovery",
+                    "message_id": msg_id,
+                    "sequence_number": from_count + idx + 1
+                }
+                json_send_msg = json.dumps(send_msg)
+                udp_socket.sendto(json_send_msg.encode('utf-8'), requester_address)
+            
+            # Send end of recovery message
+            end_msg = {
+                "type": "recovery_complete",
+                "final_clock": self.message_clock.copy(),
+                "sender_port": str(self.port)
+            }
+            udp_socket.sendto(json.dumps(end_msg).encode('utf-8'), requester_address)
 
     
     def handle_user_input(self, udp_socket):
@@ -148,7 +298,7 @@ class P2PClient(object):
                 print("/history - shows most recent sent messages")
                 print("/exit - exits room and returns to menu")
                 print("\n====================\n")
-            elif message.lower().endswith("/exit"):
+            elif message.lower() == "/exit":
                 print("Exiting chatroom...")
                 self.running = False
                 return -1
@@ -157,26 +307,34 @@ class P2PClient(object):
                 for idx, msg in enumerate(self.message_log, 1):
                     print(f"{idx}. {msg}")
                 print("====================\n")
+            elif message.lower() == "/clock":
+                print("\n=== Message Clock ===")
+                for port, count in self.message_clock.items():
+                    print(f"Client {port}: {count} messages")
+                print("====================\n")
 
         
         print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
 
-        # Only add non-command messages to the log
+        # Only add non-command messages to the log and update clock
         if not message.startswith("/"):
             self.message_log.append(message)
+            self.message_clock[str(self.port)] = self.message_clock.get(str(self.port), 0) + 1
 
-        for peer in self.peers:
-            if peer != (self.address, self.port):
-                try:
-                    send_msg = {
-                        "user": self.user_id,
-                        "body": message
-                    }
-                    json_send_msg = json.dumps(send_msg)
-                    udp_socket.sendto(json_send_msg.encode('utf-8'), tuple(peer))
+            for peer in self.peers:
+                if peer != (self.address, self.port):
+                    try:
+                        send_msg = {
+                            "user": self.user_id,
+                            "body": message,
+                            "message_clock": self.message_clock,
+                            "type": "chat"
+                        }
+                        json_send_msg = json.dumps(send_msg)
+                        udp_socket.sendto(json_send_msg.encode('utf-8'), tuple(peer))
 
-                except Exception as e:
-                    print(f"Error sending message to {peer}: {e}")
+                    except Exception as e:
+                        print(f"Error sending message to {peer}: {e}")
 
 
     def display_menu(self):
@@ -298,6 +456,14 @@ class P2PClient(object):
                         print(f"Client successfully joined {room}")
                         self.room = room
                         self.peers = [tuple(room) for room in response["ips"]]
+                        # Initialize message clock with current state from server
+                        self.message_clock = response.get("message_clock", {})
+                        # Store initial clock values at join time
+                        self.join_time_clock = self.message_clock.copy()
+                        # Add self to message clock if not present
+                        if str(self.port) not in self.message_clock:
+                            self.message_clock[str(self.port)] = 0
+                            self.join_time_clock[str(self.port)] = 0
                         return True
                     
                     else:
