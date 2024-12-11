@@ -39,76 +39,75 @@ class NameServer(object):
                 try:
                     parsed_message = json.loads(message)
                     print(f"Parsed message: {parsed_message}")
+                    action = parsed_message["action"]
 
-                    match parsed_message["action"]:
-
-                        case "list":
-                            print(f"{client_address} requested to list rooms")
-                            rooms = self.rooms
-                            if rooms:
-                                response = {
-                                    "status": "success",
-                                    "message": "Retrieved available rooms",
-                                    "rooms": {
-                                        room_name: {
-                                            "member_count": len(members)
-                                        }
-                                        for room_name, members in rooms.items()
+                    if action == "list":
+                        print(f"{client_address} requested to list rooms")
+                        rooms = self.rooms
+                        if rooms:
+                            response = {
+                                "status": "success",
+                                "message": "Retrieved available rooms",
+                                "rooms": {
+                                    room_name: {
+                                        "member_count": len(members)
                                     }
+                                    for room_name, members in rooms.items()
                                 }
-                            else:
-                                response = {
-                                    "status": "success",
-                                    "message": f"There are no active rooms available"
-                                }
+                            }
+                        else:
+                            response = {
+                                "status": "success",
+                                "message": f"There are no active rooms available"
+                            }
 
-                        case "join":
-                            room_name = parsed_message["room"]
-                            print(f"{client_address} requested to join room: {room_name}")
-                            rooms = self.__add_client_to_room(room_name, client_address)
-                            self.__update_client_list(room_name, "join", client_address)
-                            if rooms:
-                                response = {
-                                    "status": "success",
-                                    "message": f"Successfully joined room '{room_name}'",
-                                    "ips": rooms
-                                }
-                            else:
-                                response = {
-                                    "status": "failure",
-                                    "message": f"room {room_name} does not exist"
-                                }
+                    elif action == "join":
+                        room_name = parsed_message["room"]
+                        print(f"{client_address} requested to join room: {room_name}")
+                        rooms = self.__add_client_to_room(room_name, client_address)
+                        self.__update_client_list(room_name, "join", client_address)
+                        if rooms:
+                            response = {
+                                "status": "success",
+                                "message": f"Successfully joined room '{room_name}'",
+                                "ips": rooms
+                            }
+                        else:
+                            response = {
+                                "status": "failure",
+                                "message": f"room {room_name} does not exist"
+                            }
 
-                        case "create":
-                            room_name = parsed_message["room"]
-                            print(f"{client_address} requested to create room: {room_name}")
-                            if room_name:
-                                self.__create_room(room_name, client_address)
-                                response = {
-                                    "status": "success",
-                                    "message": f"Successfully created room '{room_name}'",
-                                }
-                            else:
-                                response = {
-                                    "status": "error",
-                                    "message": "Invalid request format"
-                                }
+                    elif action == "create":
+                        room_name = parsed_message["room"]
+                        print(f"{client_address} requested to create room: {room_name}")
+                        if room_name:
+                            self.__create_room(room_name, client_address)
+                            response = {
+                                "status": "success",
+                                "message": f"Successfully created room '{room_name}'",
+                            }
+                        else:
+                            response = {
+                                "status": "error",
+                                "message": "Invalid request format"
+                            }
 
-                        case "leave":
-                            room_name = parsed_message["room"]
-                            print(f"{client_address} requested to leave room ")
-                            if room_name:
-                                self.__remove_client_from_room(room_name, client_address)
-                                self.__update_client_list(room_name, "leave", client_address)
-                                response = {
-                                    "status": "success",
-                                    "message": f"Successfully left room '{room_name}'",
-                                }
-                            else:
-                                response = {
-                                    "status": "error",
-                                    "message": "Invalid request format"
-                                }
+                    elif action == "leave":
+                        room_name = parsed_message["room"]
+                        print(f"{client_address} requested to leave room ")
+                        if room_name:
+                            self.__remove_client_from_room(room_name, client_address)
+                            self.__update_client_list(room_name, "leave", client_address)
+                            response = {
+                                "status": "success",
+                                "message": f"Successfully left room '{room_name}'",
+                            }
+                        else:
+                            response = {
+                                "status": "error",
+                                "message": "Invalid request format"
+                            }
 
                 except json.JSONDecodeError:
                     response = {
