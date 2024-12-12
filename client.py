@@ -197,6 +197,15 @@ class P2PClient(object):
                                 print(f"\n{bcolors.YELLOW}[RECOVERY] Completed recovery from client {sender_port}{bcolors.ENDC}")
                                 print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
 
+                        elif msg.get("type") == "room_verify":
+                            # Server is verifying room state
+                            verify_response = {
+                                "type": "room_verify_response",
+                                "room": msg["room"],
+                                "active_clients": self.peers
+                            }
+                            udp_socket.sendto(json.dumps(verify_response).encode('utf-8'), addr)
+
                         else:  # Regular chat message
                             sender_port = str(addr[1])
                             msg_id = msg.get("message_id", f"{sender_port}_{time.time()}")
@@ -872,6 +881,6 @@ class P2PClient(object):
             print(f"{bcolors.GREEN}All peers responded!{bcolors.ENDC}")
 
 if __name__ == "__main__":
-    target_hostname = "student13.cse.nd.edu"
+    target_hostname = "127.0.0.1"
     target_port = 12345
     client = P2PClient(target_hostname, target_port)
