@@ -175,6 +175,20 @@ class P2PClient(object):
                                     print(f'\n{bcolors.YELLOW}[RECOVERY] {msg["user"]}: {msg["body"]}{bcolors.ENDC}')
                                     print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
 
+                        elif msg.get("type") == "ping":
+                            # Send 3 responses to ensure at least one gets through
+                            response = {
+                                "type": "ping_response",
+                                "responder_id": self.user_id,
+                                "timestamp": time.time()
+                            }
+                            for _ in range(3):
+                                try:
+                                    udp_socket.sendto(json.dumps(response).encode('utf-8'), addr)
+                                except Exception as e:
+                                    print(f"Error sending ping response: {e}")
+                                time.sleep(0.1)  # Small delay between responses
+
                         elif msg.get("type") == "recovery_complete":
                             sender_port = msg["sender_port"]
                             if sender_port in self.recovery_in_progress:
@@ -335,6 +349,7 @@ class P2PClient(object):
                 print("/clock - shows clock of messages sent by each client")
                 print("/history - shows most recent sent messages")
                 print("/peers - shows current peers in client list")
+                print("/ping - check for inactive peers")
                 print("/exit - exits room and returns to menu")
                 print("\n====================\n")
 
@@ -362,6 +377,9 @@ class P2PClient(object):
                 for peer in self.peers:
                     print(f"{peer}")
                 print("====================\n")
+
+            elif message.lower() == "/ping":
+                self.ping_peers(udp_socket)
 
         
         print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
@@ -556,6 +574,7 @@ class P2PClient(object):
                 if response["status"] == "success":
                     print(f"Server successfully created room {room}")
                     self.room = room
+                    self.peers = [(self.address, self.port)]
                     return True
                 
                 else:
@@ -626,6 +645,231 @@ class P2PClient(object):
         except Exception as e:
             print(f"Error during room exit: {e}")
             return False
+        
+    def ping_peers(self, udp_socket):
+        '''
+        Ping all peers to check for inactive clients while still receiving messages.
+        Sends 3 pings and waits for responses.
+        '''
+        if not self.peers:
+            print("No peers to ping.")
+            return
+
+        print("\nPinging peers...")
+
+        own_address = (self.address, self.port)
+        responses = {peer: 0 for peer in self.peers if peer != own_address} # Do not ping self
+        
+        if not responses:
+            print("No other peers to ping.")
+            return
+
+        ping_msg = {
+            "type": "ping",
+            "sender_id": self.user_id,
+            "address": self.address,
+            "port": self.port,
+            "timestamp": time.time()
+        }
+
+        # Send 3 pings (excluding self)
+        for _ in range(3):
+            for peer in self.peers:
+                if peer != own_address:  # Don't ping self
+                    try:
+                        udp_socket.sendto(json.dumps(ping_msg).encode('utf-8'), peer)
+                    except Exception as e:
+                        print(f"Error sending ping to {peer}: {e}")
+            time.sleep(0.5)  # Small delay between ping
+
+        # Wait for responses while still handling other messages
+        timeout = time.time() + 5  # 5 second timeout
+        
+        while time.time() < timeout:
+            try:
+                # Use select with a short timeout to check for messages
+                readable, _, _ = select.select([udp_socket, sys.stdin], [], [], 0.5)
+                
+                for source in readable:
+                    if source == udp_socket:
+                        data, addr = udp_socket.recvfrom(1024)
+                        msg = json.loads(data.decode('utf-8'))
+                        
+                        if msg.get("type") == "ping_response":
+                            # Handle ping response
+                            responses[(addr[0], addr[1])] += 1
+                        
+                        elif "status" in msg and msg["status"] == "update":
+                            # Handle join/leave updates
+                            if msg["type"] == "join":
+                                new_peer = (msg["address"], msg["port"])
+                                if new_peer not in self.peers:
+                                    self.peers.append(new_peer)
+                                print(f"\n{bcolors.WARNING}{msg['member']} has joined the room{bcolors.ENDC}")
+                            
+                            elif msg["type"] == "leave":
+                                leaving_peer = (msg["address"], msg["port"])
+                                if leaving_peer in self.peers:
+                                    self.peers.remove(leaving_peer)
+                                leaving_port = str(msg["port"])
+                                if leaving_port in self.message_clock:
+                                    del self.message_clock[leaving_port]
+                                if leaving_port in self.join_time_clock:
+                                    del self.join_time_clock[leaving_port]
+                                if leaving_port in self.recovery_in_progress:
+                                    self.recovery_in_progress.remove(leaving_port)
+                                print(f"\n{bcolors.WARNING}{msg['member']} has left the room{bcolors.ENDC}")
+                        
+                        elif msg.get("type") == "message_request":
+                            # Handle recovery requests
+                            self.send_requested_messages(
+                                udp_socket, 
+                                msg["requesting_port"], 
+                                msg["count"],
+                                msg.get("from_count", 0)
+                            )
+                        
+                        elif msg.get("type") == "recovery":
+                            # Handle recovery messages
+                            sender_port = str(addr[1])
+                            msg_id = msg["message_id"]
+                            
+                            if msg_id not in self.received_messages:
+                                self.received_messages.add(msg_id)
+                                sequence_number = msg["sequence_number"]
+                                
+                                if sequence_number == self.message_clock.get(sender_port, 0) + 1:
+                                    self.message_clock[sender_port] = sequence_number
+                                    print(f'\n{bcolors.YELLOW}[RECOVERY] {msg["user"]}: {msg["body"]}{bcolors.ENDC}')
+                        
+                        elif msg.get("type") == "recovery_complete":
+                            # Handle recovery completion
+                            sender_port = msg["sender_port"]
+                            if sender_port in self.recovery_in_progress:
+                                self.recovery_in_progress.remove(sender_port)
+                                self.message_clock.update(msg["final_clock"])
+                                print(f"\n{bcolors.YELLOW}[RECOVERY] Completed recovery from client {sender_port}{bcolors.ENDC}")
+                        
+                        else:  # Regular chat message
+                            sender_port = str(addr[1])
+                            msg_id = msg.get("message_id", f"{sender_port}_{time.time()}")
+                            
+                            if msg_id not in self.received_messages:
+                                self.received_messages.add(msg_id)
+                                
+                                if "message_clock" in msg:
+                                    received_clock = msg["message_clock"]
+                                    needs_recovery = False
+                                    
+                                    if not self.recovery_in_progress:
+                                        for port, count in received_clock.items():
+                                            if port == sender_port:
+                                                if port in self.join_time_clock:
+                                                    expected = self.message_clock.get(port, 0) + 1
+                                                    join_time_count = self.join_time_clock.get(port, 0)
+                                                    if count > expected and count > join_time_count:
+                                                        needs_recovery = True
+                                            else:
+                                                local_count = self.message_clock.get(port, 0)
+                                                join_time_count = self.join_time_clock.get(port, 0)
+                                                if count > local_count and count > join_time_count:
+                                                    needs_recovery = True
+                                        
+                                        if needs_recovery:
+                                            self.request_missing_messages(
+                                                udp_socket, 
+                                                sender_port, 
+                                                received_clock[sender_port],
+                                                self.message_clock.get(sender_port, 0)
+                                            )
+                                    
+                                    if not needs_recovery:
+                                        self.message_clock.update(received_clock)
+                                
+                                if msg.get("type") != "recovery":
+                                    print(f'\n{msg["user"]}: {msg["body"]}')
+                        
+                        print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+                    
+                    elif source == sys.stdin:
+                        # Handle user input during ping
+                        user_input = sys.stdin.readline().strip()
+                        if user_input and not user_input.startswith('/'):
+                            self.message_log.append(user_input)
+                            self.message_clock[str(self.port)] = self.message_clock.get(str(self.port), 0) + 1
+                            
+                            for peer in self.peers:
+                                try:
+                                    send_msg = {
+                                        "user": self.user_id,
+                                        "body": user_input,
+                                        "message_clock": self.message_clock,
+                                        "type": "chat"
+                                    }
+                                    udp_socket.sendto(json.dumps(send_msg).encode('utf-8'), peer)
+                                except Exception as e:
+                                    print(f"Error sending message to {peer}: {e}")
+                            
+                            print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
+                            
+            except Exception as e:
+                print(f"Error during ping: {e}")
+
+        # Process results
+        inactive_peers = []
+        for peer, response_count in responses.items():
+            if response_count == 0:
+                inactive_peers.append(peer)
+                print(f"{bcolors.RED}No response from {peer}{bcolors.ENDC}")
+
+        # Handle inactive peers
+        if inactive_peers:
+            for inactive_peer in inactive_peers:
+                remove_msg = {
+                    "status": "update",
+                    "type": "leave",
+                    "room": self.room,
+                    "member": "Unknown (timeout)",
+                    "address": inactive_peer[0],
+                    "port": inactive_peer[1],
+                    "reason": "ping_timeout"
+                }
+                
+                # Remove locally
+                if inactive_peer in self.peers:
+                    self.peers.remove(inactive_peer)
+                    leaving_port = str(inactive_peer[1])
+                    if leaving_port in self.message_clock:
+                        del self.message_clock[leaving_port]
+                    if leaving_port in self.join_time_clock:
+                        del self.join_time_clock[leaving_port]
+                    if leaving_port in self.recovery_in_progress:
+                        self.recovery_in_progress.remove(leaving_port)
+                
+                # Broadcast to remaining peers
+                for peer in self.peers:
+                    try:
+                        udp_socket.sendto(json.dumps(remove_msg).encode('utf-8'), peer)
+                    except Exception as e:
+                        print(f"Error notifying peer {peer} of removal: {e}")
+
+            # Update server
+            client_socket = self.connect_to_central_server()
+            if client_socket:
+                try:
+                    update_request = {
+                        "action": "update_room",
+                        "room": self.room,
+                        "active_clients": self.peers
+                    }
+                    client_socket.sendall(json.dumps(update_request).encode("utf-8"))
+                    response = json.loads(client_socket.recv(1024).decode("utf-8"))
+                    if response["status"] != "success":
+                        print(f"Server failed to update room list: {response.get('message', 'Unknown error')}")
+                finally:
+                    client_socket.close()
+        else:
+            print(f"{bcolors.GREEN}All peers responded!{bcolors.ENDC}")
 
 if __name__ == "__main__":
     target_hostname = "student13.cse.nd.edu"

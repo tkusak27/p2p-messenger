@@ -89,6 +89,25 @@ class NameServer(object):
                                 "message": "Invalid request format"
                             }
 
+                    elif action == "update_room":
+                        room_name = parsed_message["room"]
+                        active_clients = parsed_message["active_clients"]
+                        print(f"{client_address} sent updated client list for room: {room_name}")
+                        
+                        if room_name in self.rooms:
+                            self.rooms[room_name] = [tuple(client) for client in active_clients]
+                            if not self.rooms[room_name]:
+                                del self.rooms[room_name]
+                            response = {
+                                "status": "success",
+                                "message": f"Successfully updated room '{room_name}'"
+                            }
+                        else:
+                            response = {
+                                "status": "error",
+                                "message": f"Room {room_name} does not exist"
+                            }
+
                     elif action == "leave":
                         room_name = parsed_message["room"]
                         original_address = parsed_message["original_address"]
