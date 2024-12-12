@@ -328,7 +328,14 @@ class P2PClient(object):
                     "sequence_number": from_count + idx + 1
                 }
                 json_send_msg = json.dumps(send_msg)
-                udp_socket.sendto(json_send_msg.encode('utf-8'), requester_address)
+                
+                # Send each message 5 times with small delays
+                for _ in range(5):
+                    try:
+                        udp_socket.sendto(json_send_msg.encode('utf-8'), requester_address)
+                        time.sleep(0.1)  # Small delay between retries
+                    except Exception as e:
+                        print(f"Error during recovery message send: {e}")
             
             # Send end of recovery message
             end_msg = {
@@ -336,7 +343,15 @@ class P2PClient(object):
                 "final_clock": self.message_clock.copy(),
                 "sender_port": str(self.port)
             }
-            udp_socket.sendto(json.dumps(end_msg).encode('utf-8'), requester_address)
+            json_end_msg = json.dumps(end_msg)
+            
+            # Send completion message 5 times as well
+            for _ in range(5):
+                try:
+                    udp_socket.sendto(json_end_msg.encode('utf-8'), requester_address)
+                    time.sleep(0.1)
+                except Exception as e:
+                    print(f"Error sending recovery completion: {e}")
 
     
     def handle_user_input(self, udp_socket):
