@@ -1,4 +1,4 @@
-import socket, json, sys, select
+import socket, json, sys, select, time
 from styles.bcolors import bcolors
 from collections import deque
 
@@ -21,6 +21,8 @@ class P2PClient(object):
         self.running = False
         self.address = None
         self.port = None
+        self.tcp_address = None
+        self.tcp_port = None
         self.user_id = None
         self.message_log = deque(maxlen=20)
         self.message_clock = dict()
@@ -89,10 +91,8 @@ class P2PClient(object):
 
     def chat_handler(self):
         '''
-        Key handler which handles all chat communication, such as sending and receiving
-        messages
+        Key handler which handles all chat communication, including peer updates
         '''
-        # assuming we have already joined the room and have the ips
         print(f"{bcolors.GREEN}{bcolors.BOLD}Chatroom {self.room} opened!{bcolors.ENDC}")
         print(f"{bcolors.CYAN}{len(self.peers)} peers are here now.{bcolors.ENDC}")
         print(bcolors.RED + "Type '/help' for a list of helpful commands to navigate the application." + bcolors.ENDC)
@@ -100,9 +100,27 @@ class P2PClient(object):
 
         self.running = True
 
+        # Create the single UDP socket that will be used throughout the session
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp_socket.bind(('', self.port)) 
+        udp_socket.bind(('', self.port))
+
         try:
+            # Broadcast join message to all peers using the single UDP socket
+            join_msg = {
+                "status": "update",
+                "type": "join",
+                "room": self.room,
+                "member": self.user_id,
+                "address": self.address,
+                "port": self.port
+            }
+            
+            for peer in self.peers:
+                try:
+                    udp_socket.sendto(json.dumps(join_msg).encode('utf-8'), peer)
+                except Exception as e:
+                    print(f"Error announcing join to peer {peer}: {e}")
+
             while self.running:
                 readable, _, _ = select.select([sys.stdin, udp_socket], [], [])
 
@@ -112,11 +130,28 @@ class P2PClient(object):
                         msg = json.loads(data.decode('utf-8'))
                         
                         if "status" in msg and msg["status"] == "update":
-                            self.peers = [tuple(peer) for peer in msg["clients"]]
                             if "type" in msg and msg["type"] == "join":
+                                # Add the new peer to our list
+                                new_peer = (msg["address"], msg["port"])
+                                if new_peer not in self.peers:
+                                    self.peers.append(new_peer)
                                 print(f"{bcolors.WARNING}{msg['member']} has joined the room{bcolors.ENDC}")
+                                
                             elif "type" in msg and msg["type"] == "leave":
+                                # Remove the peer that's leaving
+                                leaving_peer = (msg["address"], msg["port"])
+                                if leaving_peer in self.peers:
+                                    self.peers.remove(leaving_peer)
+                                # Also remove from clocks
+                                leaving_port = str(msg["port"])
+                                if leaving_port in self.message_clock:
+                                    del self.message_clock[leaving_port]
+                                if leaving_port in self.join_time_clock:
+                                    del self.join_time_clock[leaving_port]
+                                if leaving_port in self.recovery_in_progress:
+                                    self.recovery_in_progress.remove(leaving_port)
                                 print(f"{bcolors.WARNING}{msg['member']} has left the room{bcolors.ENDC}")
+                            print(bcolors.CYAN + bcolors.BOLD + "> " + bcolors.ENDC, end="", flush=True)
 
                         elif msg.get("type") == "message_request":
                             self.send_requested_messages(
@@ -197,8 +232,10 @@ class P2PClient(object):
                     elif source == sys.stdin: 
                         output = self.handle_user_input(udp_socket)
                         if output == -1:
+                            # Handle leaving the room with the same socket
+                            if self.room:
+                                self.leave_room(self.room, udp_socket)
                             break
-
         except KeyboardInterrupt:
             print("\nChatroom closed.")
         finally:
@@ -295,22 +332,35 @@ class P2PClient(object):
         if message.lower().startswith("/"):
             if message.lower() == "/help":
                 print("\n=== Options ===\n")
+                print("/clock - shows clock of messages sent by each client")
                 print("/history - shows most recent sent messages")
+                print("/peers - shows current peers in client list")
                 print("/exit - exits room and returns to menu")
                 print("\n====================\n")
+
             elif message.lower() == "/exit":
                 print("Exiting chatroom...")
+                if self.room:
+                    self.leave_room(self.room, udp_socket=udp_socket)
                 self.running = False
                 return -1
+            
             elif message.lower() == "/history":
                 print("\n=== Message History ===")
                 for idx, msg in enumerate(self.message_log, 1):
                     print(f"{idx}. {msg}")
                 print("====================\n")
+
             elif message.lower() == "/clock":
                 print("\n=== Message Clock ===")
                 for port, count in self.message_clock.items():
                     print(f"Client {port}: {count} messages")
+                print("====================\n")
+
+            elif message.lower() == "/peers":
+                print("\n=== Peers ===")
+                for peer in self.peers:
+                    print(f"{peer}")
                 print("====================\n")
 
         
@@ -426,19 +476,22 @@ class P2PClient(object):
             if self.server_socket:
                 self.server_socket.close()
 
-
     def join_room(self, room):
         '''
-        Joins a specified room.
-
+        Joins a specified room by getting initial peer list from server then broadcasting presence.
+        
         args:
             room (str): Identifier of the room the client wishes to join.
         '''
         try:
+            # First get initial room info from server
             self.server_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
             if not self.server_socket:
                 print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
                 return False
+            
+            # Store TCP connection details when joining
+            self.tcp_address, self.tcp_port = self.server_socket.getsockname()
             
             join_request = {
                 "action": "join",
@@ -447,34 +500,30 @@ class P2PClient(object):
 
             self.server_socket.sendall(json.dumps(join_request).encode("utf-8"))
 
-            while True:
-                message = self.server_socket.recv(1024)
-                if message:
-                    response = json.loads(message.decode("utf-8"))
+            message = self.server_socket.recv(1024)
+            if message:
+                response = json.loads(message.decode("utf-8"))
 
-                    if response["status"] == "success":
-                        print(f"Client successfully joined {room}")
-                        self.room = room
-                        self.peers = [tuple(room) for room in response["ips"]]
-                        # Initialize message clock with current state from server
-                        self.message_clock = response.get("message_clock", {})
-                        # Store initial clock values at join time
-                        self.join_time_clock = self.message_clock.copy()
-                        # Add self to message clock if not present
-                        if str(self.port) not in self.message_clock:
-                            self.message_clock[str(self.port)] = 0
-                            self.join_time_clock[str(self.port)] = 0
-                        return True
+                if response["status"] == "success":
+                    print(f"Got initial room info for {room}")
+                    self.room = room
+                    self.peers = [tuple(peer) for peer in response["ips"]]
                     
-                    else:
-                        print(f"Server failed to receive info of {room}")
-                        return False
-
+                    # Initialize message tracking
+                    self.message_clock = {}
+                    self.join_time_clock = {}
+                    if str(self.port) not in self.message_clock:
+                        self.message_clock[str(self.port)] = 0
+                        self.join_time_clock[str(self.port)] = 0
+                        
+                    return True
                 else:
-                    print("Server closed the connection.")
-                    break
+                    print(f"Server failed to provide room info for {room}")
+                    return False
+
         except (socket.timeout, socket.error) as e:
             print(f"Connection failed: {e}")
+            return False
         
 
     def create_room(self, room):
@@ -491,70 +540,92 @@ class P2PClient(object):
                 print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
                 return False
             
+            # Store TCP connection details when creating
+            self.tcp_address, self.tcp_port = self.server_socket.getsockname()
+            
             join_request = {
                 "action": "create",
                 "room": room,
             }
             self.server_socket.sendall(json.dumps(join_request).encode("utf-8"))
 
-            while True:
-                message = self.server_socket.recv(1024)
-                if message:
-                    response = json.loads(message.decode("utf-8"))
+            message = self.server_socket.recv(1024)
+            if message:
+                response = json.loads(message.decode("utf-8"))
 
-                    if response["status"] == "success":
-                        print(f"Server successfully created room {room}")
-                        self.room = room
-                        return True
-                    
-                    else:
-                        print(f"Server failed to create room {room}")
-                        return False
+                if response["status"] == "success":
+                    print(f"Server successfully created room {room}")
+                    self.room = room
+                    return True
+                
+                else:
+                    print(f"Server failed to create room {room}")
+                    return False
         
         except (socket.timeout, socket.error) as e:
             print(f"Connection failed: {e}")
 
 
-    # fix this for later
-    def leave_room(self, room):
+    def leave_room(self, room, udp_socket):
         '''
-        Get the client to leave the room
-
+        Leave a room and notify peers directly.
+        
         args:
-            room (str): Identifier of the room the client wishes to leave.
+            room (str): Identifier of the room to leave
+            udp_socket (socket): The UDP socket for sending the leave notification
         '''
         try:
-            client_socket = self.connect_to_central_server(self.server_hostname, self.server_port)
-            if not client_socket:
-                print(f"Error creating socket connection to {self.server_hostname}:{self.server_port}")
-                return False
-            
-            join_request = {
-                "action": "leave",
-                "room": room
+            # Prepare leave notification
+            leave_notification = {
+                "status": "update",
+                "type": "leave",
+                "room": room,
+                "member": self.user_id,
+                "address": self.address,
+                "port": self.port
             }
-            client_socket.sendall(json.dumps(join_request).encode("utf-8"))
-            print(f"Sent create request: {join_request}")
+            
+            # Notify all peers using the provided socket
+            for peer in self.peers:
+                if peer != (self.address, self.port):
+                    try:
+                        json_notification = json.dumps(leave_notification)
+                        udp_socket.sendto(json_notification.encode('utf-8'), peer)
+                    except Exception as e:
+                        print(f"Error notifying peer {peer} of leave: {e}")
 
-            while True:
-                message = client_socket.recv(1024)
-                if message:
-                    response = json.loads(message.decode("utf-8"))
+            # Then notify server with original connection details
+            client_socket = self.connect_to_central_server()
+            if client_socket:
+                try:
+                    leave_request = {
+                        "action": "leave",
+                        "room": room,
+                        "original_address": self.tcp_address,
+                        "original_port": self.tcp_port
+                    }
+                    client_socket.sendall(json.dumps(leave_request).encode("utf-8"))
+                    # Wait for server response
+                    response = json.loads(client_socket.recv(1024).decode("utf-8"))
+                    if response["status"] != "success":
+                        print(f"Server failed to process leave request: {response.get('message', 'Unknown error')}")
+                finally:
+                    client_socket.close()
 
-                    if response["status"] == "success":
-                        print(f"Server successfully removed client from room {room}")
-                        self.room = None
-                        return True
-                    
-                    else:
-                        print(f"Server failed to remove client from room {room}")
-                        return False
-        
-        except (socket.timeout, socket.error) as e:
-            print(f"Connection failed: {e}")
-        finally:
-            client_socket.close()
-
+            # Clear local state
+            print(f"Left room {room}")
+            self.room = None
+            self.peers = []
+            self.message_log.clear()
+            self.message_clock.clear()
+            self.join_time_clock.clear()
+            self.recovery_in_progress.clear()
+            self.received_messages.clear()
+            return True
+                
+        except Exception as e:
+            print(f"Error during room exit: {e}")
+            return False
 
 if __name__ == "__main__":
     target_hostname = "student13.cse.nd.edu"
